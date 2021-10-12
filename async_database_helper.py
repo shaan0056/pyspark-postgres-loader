@@ -126,7 +126,7 @@ async def batch_and_upsert(dataframe_partition: Iterable[Row],
                            batch_size: int = 1000):
     """
     Batch the input dataframe_partition as per batch_size and insert/update
-    to postgres using psycopg2 execute values with built in error handling.
+    to postgres using asyncpg executemany with built in error handling.
     :param dataframe_partition: Pyspark DataFrame partition or any iterable.
     :param sql: query to insert/upsert the spark dataframe partition to postgres.
     :param database_credentials: postgres database credentials.
