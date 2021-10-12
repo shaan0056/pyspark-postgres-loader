@@ -4,7 +4,7 @@ Helper code to Upsert Spark DataFrame to Postgres using psycopg2.
 from typing import List, Iterable, Dict, Any, Tuple
 from psycopg2 import connect, DatabaseError, Error
 from psycopg2.extras import execute_values
-from pyspark.sql import DataFrame
+from pyspark.sql import DataFrame, Row
 
 
 def savepoint(sp_cur,
@@ -66,7 +66,7 @@ def get_postgres_connection(host: str,
 
 
 def execute_with_err_handling(db_cur,
-                              batch_list: list,
+                              batch_list: List[List[Row]],
                               func,
                               *args,
                               **kwargs) -> Tuple[int, List[str]]:
@@ -95,8 +95,7 @@ def execute_with_err_handling(db_cur,
                 split_batches = batch_error_handler(batch=batch)
 
                 if split_batches:
-                    for split_batch in split_batches:
-                        batch_list.append(split_batch)
+                    batch_list.extend(split_batches)
                 else:
                     total_error_count += 1
                     total_error_msgs.append(str(error))
@@ -104,7 +103,7 @@ def execute_with_err_handling(db_cur,
     return total_error_count, total_error_msgs
 
 
-def batch_error_handler(batch: list) -> list or None:
+def batch_error_handler(batch: List[Row]) -> List[List[Row]] or None:
     """
     Split the rejected batch into two equal halves and return the same.
     If however, the batch has only one record, return None to indicate
@@ -122,7 +121,7 @@ def batch_error_handler(batch: list) -> list or None:
     return split_batches
 
 
-def batch_and_upsert(dataframe_partition: Iterable,
+def batch_and_upsert(dataframe_partition: Iterable[Row],
                      sql: str,
                      database_credentials: dict,
                      batch_size: int = 1000):
