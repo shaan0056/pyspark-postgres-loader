@@ -2,11 +2,13 @@
 Helper code to Upsert Spark DataFrame to Postgres using psycopg2.
 """
 from typing import List, Iterable, Dict, Any, Tuple
+from contextlib import contextmanager
 from psycopg2 import connect, DatabaseError, Error
 from psycopg2.extras import execute_values
 from pyspark.sql import DataFrame, Row
 
 
+@contextmanager
 def savepoint(sp_cur,
               sp_name: str,
               func,
