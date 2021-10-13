@@ -12,8 +12,8 @@ from pyspark.sql import DataFrame, Row
 def savepoint(sp_cur,
               sp_name: str,
               func,
-              *args: Tuple[Any, ...],
-              **kwargs: Dict[str, Any]) -> tuple:
+              *args,
+              **kwargs) -> tuple:
     """
     A context manager to set savepoint, execute a database action
     and rollback to the savepoint in the event of an exception or
@@ -67,18 +67,14 @@ def get_postgres_connection(host: str,
     return conn
 
 
-def execute_with_err_handling(db_cur,
-                              batch_list: List[List[Row]],
-                              func,
-                              *args,
-                              **kwargs) -> Tuple[int, List[str]]:
+def execute_values_with_err_handling(db_cur,
+                                     batch_list: List[List[Row]],
+                                     sql: str) -> Tuple[int, List[str]]:
     """
     Execute a database action with error handling.
     :param db_cur: psycopg2 cursor.
     :param batch_list: List of batches to load.
-    :param func: database function to execute.
-    :param args: function arguments.
-    :param kwargs: function keyword arguments.
+    :param sql: query to execute.
     :return: total error count and list of error messages.
     """
 
@@ -90,7 +86,8 @@ def execute_with_err_handling(db_cur,
 
         with savepoint(
                 db_cur, 'my_sp',
-                func, *args, **kwargs
+                execute_values, cur=db_cur, sql=sql,
+                argslist=batch, page_size=len(batch)
         ) as (output, error):
 
             if error:
@@ -158,10 +155,10 @@ def batch_and_upsert(dataframe_partition: Iterable[Row],
 
         if counter % batch_size == 0:
             batch_list.append(batch)
-            total_error_count, total_error_msgs = execute_with_err_handling(
-                db_cur=cur, batch_list=batch_list,
-                func=execute_values, cur=cur, sql=sql,
-                argslist=batch, page_size=batch_size
+            total_error_count, total_error_msgs = execute_values_with_err_handling(
+                db_cur=cur,
+                batch_list=batch_list,
+                sql=sql
             )
             conn.commit()
             error_counter += total_error_count
@@ -170,11 +167,11 @@ def batch_and_upsert(dataframe_partition: Iterable[Row],
 
     if batch:
         batch_list.append(batch)
-        total_error_count, total_error_msgs = execute_with_err_handling(
-            db_cur=cur, batch_list=batch_list,
-            func=execute_values, cur=cur, sql=sql,
-            argslist=batch, page_size=batch_size
-        )
+        total_error_count, total_error_msgs = execute_values_with_err_handling(
+                db_cur=cur,
+                batch_list=batch_list,
+                sql=sql
+            )
         conn.commit()
         error_counter += total_error_count
         final_error_msgs.append(total_error_msgs)
@@ -232,7 +229,14 @@ def build_upsert_query(cols: List[str],
     update_cols_with_excluded_markers = [f'EXCLUDED.{col}' for col in update_cols]
     update_cols_with_excluded_markers_str = ', '.join(update_cols_with_excluded_markers)
 
-    on_conflict_clause = """ ON CONFLICT (%s) DO UPDATE SET (%s) = (%s) ;""" % (
+    if len(update_cols) > 1:
+        equality_clause = "(%s) = (%s)"
+    else:
+        equality_clause = "%s = %s"
+
+    on_conflict_clause = f""" ON CONFLICT (%s) DO UPDATE SET {equality_clause} ;"""
+
+    on_conflict_clause = on_conflict_clause % (
         unique_key_str,
         update_cols_str,
         update_cols_with_excluded_markers_str
