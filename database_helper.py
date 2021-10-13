@@ -1,7 +1,7 @@
 """
 Helper code to Upsert Spark DataFrame to Postgres using psycopg2.
 """
-from typing import List, Iterable, Dict, Any, Tuple
+from typing import List, Iterable, Dict, Tuple
 from contextlib import contextmanager
 from psycopg2 import connect, DatabaseError, Error
 from psycopg2.extras import execute_values
@@ -165,13 +165,16 @@ def batch_and_upsert(dataframe_partition: Iterable[Row],
             final_error_msgs.append(total_error_msgs)
             batch, batch_list = [], []
 
+            if total_error_count == batch_size:
+                break
+
     if batch:
         batch_list.append(batch)
         total_error_count, total_error_msgs = execute_values_with_err_handling(
-                db_cur=cur,
-                batch_list=batch_list,
-                sql=sql
-            )
+            db_cur=cur,
+            batch_list=batch_list,
+            sql=sql
+        )
         conn.commit()
         error_counter += total_error_count
         final_error_msgs.append(total_error_msgs)
@@ -190,6 +193,7 @@ def build_upsert_query(cols: List[str],
                        cols_not_for_update: List[str] = None) -> str:
     """
     Builds postgres upsert query using input arguments.
+    Note: In the absence of unique_key, this will be just an insert query.
 
     Example : build_upsert_query(
         ['col1', 'col2', 'col3', 'col4'],
@@ -248,12 +252,13 @@ def build_upsert_query(cols: List[str],
 def upsert_spark_df_to_postgres(dataframe_to_upsert: DataFrame,
                                 table_name: str,
                                 table_pkey: List[str],
-                                database_credentials: Dict[str:str],
+                                database_credentials: Dict[str, str],
                                 batch_size: int = 1000,
                                 parallelism: int = 1) -> None:
     """
     Upsert a spark DataFrame into a postgres table with error handling.
-
+    Note: If the target table lacks any unique index, data will be appended through
+    INSERTS as UPSERTS in postgres require a unique constraint to be present in the table.
     :param dataframe_to_upsert: spark DataFrame to upsert to postgres.
     :param table_name: postgres table name to upsert.
     :param table_pkey: postgres table primary key.
@@ -275,18 +280,18 @@ def upsert_spark_df_to_postgres(dataframe_to_upsert: DataFrame,
         )
     )
 
-    total_recs_upserted = 0
+    total_recs_loaded = 0
     total_recs_rejects = 0
     error_msgs = []
 
     for counter, error_counter, final_error_msgs in upsert_stats.collect():
-        total_recs_upserted += counter
+        total_recs_loaded += counter
         total_recs_rejects += error_counter
         error_msgs.extend(final_error_msgs)
 
     print("")
     print("#################################################")
-    print(f" Total records upserted - {total_recs_upserted}")
+    print(f" Total records loaded - {total_recs_loaded}")
     print(f" Total records rejected - {total_recs_rejects}")
     print("#################################################")
     print("")

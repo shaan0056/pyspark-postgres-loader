@@ -2,7 +2,7 @@
 Helper code to Upsert Spark DataFrame to Postgres using asyncpg.
 """
 import asyncio
-from typing import List, Iterable, Dict, Any, Tuple
+from typing import List, Iterable, Dict, Tuple
 from contextlib import asynccontextmanager
 from asyncpg import connect
 from pyspark.sql import DataFrame, Row
@@ -168,6 +168,9 @@ async def batch_and_upsert(dataframe_partition: Iterable[Row],
             final_error_msgs.append(total_error_msgs)
             batch, batch_list = [], []
 
+            if total_error_count == batch_size:
+                break
+
     if batch:
         batch_list.append(batch)
 
@@ -191,10 +194,11 @@ async def batch_and_upsert(dataframe_partition: Iterable[Row],
 
 def build_upsert_query(cols: List[str],
                        table_name: str,
-                       unique_key: List[str],
+                       unique_key: List[str] = None,
                        cols_not_for_update: List[str] = None) -> str:
     """
     Builds postgres upsert query using input arguments.
+    Note: In the absence of unique_key, this will be just an insert query.
 
     Example : build_upsert_query(
         ['col1', 'col2', 'col3', 'col4'],
@@ -202,7 +206,7 @@ def build_upsert_query(cols: List[str],
         ['col1'],
         ['col2']
     ) ->
-    INSERT INTO my_table (col1, col2, col3, col4) VALUES %s
+    INSERT INTO my_table (col1, col2, col3, col4) VALUES $1, $2, $3, $4
     ON CONFLICT (col1) DO UPDATE SET (col3, col4) = (EXCLUDED.col3, EXCLUDED.col4) ;
 
     :param cols: the postgres table columns required in the
@@ -221,6 +225,9 @@ def build_upsert_query(cols: List[str],
     insert_query = """ INSERT INTO %s (%s) VALUES %s """ % (
         table_name, cols_str, parameters
     )
+
+    if not unique_key:
+        return insert_query
 
     if cols_not_for_update is not None:
         cols_not_for_update.extend(unique_key)
@@ -251,19 +258,58 @@ def build_upsert_query(cols: List[str],
     return insert_query + on_conflict_clause
 
 
+def fetch_query_results(query_to_run: str, database_credentials: Dict[str, str]):
+    """
+    Execute a select query and fetch it's results.
+    :param query_to_run: query to execute.
+    :param database_credentials: database credentials.
+        Example: database_credentials = {
+                    host: <host>,
+                    database: <database>,
+                    user: <user>,
+                    password: <password>,
+                    port: <port>
+                }
+    :return: query results.
+    """
+
+    async def fetch_query_results_async():
+        conn = None
+        try:
+            conn = await get_postgres_connection(**database_credentials)
+            results = await conn.fetch(query_to_run)
+            return results
+        except Exception as ex:
+            print(f"Error while fetching query results for -> {query_to_run}")
+            raise ex
+        finally:
+            if conn:
+                await conn.close()
+
+    return run_coroutine(fetch_query_results_async())
+
+
 def upsert_spark_df_to_postgres(dataframe_to_upsert: DataFrame,
                                 table_name: str,
-                                table_pkey: List[str],
-                                database_credentials: Dict[str:str],
+                                table_unique_key: List[str],
+                                database_credentials: Dict[str, str],
                                 batch_size: int = 1000,
                                 parallelism: int = 1) -> None:
     """
     Upsert a spark DataFrame into a postgres table with error handling.
-
+    Note: If the target table lacks any unique index, data will be appended through
+    INSERTS as UPSERTS in postgres require a unique constraint to be present in the table.
     :param dataframe_to_upsert: spark DataFrame to upsert to postgres.
     :param table_name: postgres table name to upsert.
-    :param table_pkey: postgres table primary key.
+    :param table_unique_key: postgres table primary key.
     :param database_credentials: database credentials.
+        Example: database_credentials = {
+                    host: <host>,
+                    database: <database>,
+                    user: <user>,
+                    password: <password>,
+                    port: <port>
+                }
     :param batch_size: desired batch size for upsert.
     :param parallelism: No. of parallel connections to postgres database.
     :return:None
@@ -282,24 +328,24 @@ def upsert_spark_df_to_postgres(dataframe_to_upsert: DataFrame,
 
     upsert_query = build_upsert_query(
         cols=dataframe_to_upsert.schema.names,
-        table_name=table_name, unique_key=table_pkey
+        table_name=table_name, unique_key=table_unique_key
     )
     upsert_stats = dataframe_to_upsert.coalesce(parallelism).rdd.mapPartitions(
         lambda dataframe_partition: yield_batch_and_upsert(dataframe_partition)
     )
 
-    total_recs_upserted = 0
+    total_recs_loaded = 0
     total_recs_rejects = 0
     error_msgs = []
 
     for counter, error_counter, final_error_msgs in upsert_stats.collect():
-        total_recs_upserted += counter
+        total_recs_loaded += counter
         total_recs_rejects += error_counter
         error_msgs.extend(final_error_msgs)
 
     print("")
     print("#################################################")
-    print(f" Total records upserted - {total_recs_upserted}")
+    print(f" Total records loaded - {total_recs_loaded}")
     print(f" Total records rejected - {total_recs_rejects}")
     print("#################################################")
     print("")
@@ -317,3 +363,4 @@ def run_coroutine(coroutine):
     :return: output returned by coroutine.
     """
     return asyncio.get_event_loop().run_until_complete(coroutine)
+
