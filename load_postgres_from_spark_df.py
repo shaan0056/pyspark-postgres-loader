@@ -1,3 +1,18 @@
+"""
+A class to load (upsert/insert) Postgres tables using Spark DataFrame.
+All configuration details required for this class are pulled from config.ini.
+
+Steps:
+    -   Instantiate the source class corresponding to the source passed as input and
+        get the source data as spark DataFrame.
+    -   Cast the DataFrame in accordance with the target Postgres table column data types.
+        Note: The spark DataFrame column names must match with the corresponding target Postgres
+        column names.
+    -   Upsert/Insert the casted DataFrame to target Postgres table in batches. Handle errors
+        in the process as well.
+    -   Print out the load statistics once Upsert/Insert is completed.
+"""
+
 from typing import Dict, List
 from configparser import ConfigParser
 from pathlib import Path
@@ -5,13 +20,14 @@ from collections import OrderedDict
 from importlib import import_module
 import pyspark.sql.functions as f
 from pyspark.sql import DataFrame
-from async_database_helper import upsert_spark_df_to_postgres, fetch_query_results
+
 from sql import pg_col_data_type_query, pg_unique_index_query, pg_primary_key_query
 
 
 class LoadPostgresFromSparkDataFrame:
 
     def __init__(self,
+                 pg_package,
                  target_pg_table,
                  batch_size,
                  parallelism,
@@ -19,6 +35,16 @@ class LoadPostgresFromSparkDataFrame:
                  source,
                  *source_class_args,
                  **source_class_kwargs):
+
+        # Import the desired database helper module.
+        if pg_package == "asyncpg":
+            import asyncpg_database_helper
+            self._db_helper = asyncpg_database_helper
+        elif pg_package == "psycopg2":
+            import psycopg2_database_helper
+            self._db_helper = psycopg2_database_helper
+        else:
+            raise Exception(f"Unknown postgres python package provided - {pg_package}")
 
         self._target_pg_table = target_pg_table
         self._batch_size = batch_size
@@ -66,7 +92,7 @@ class LoadPostgresFromSparkDataFrame:
         target_table_unique_key = self._get_unique_key()
 
         # Load the casted DataFrame to target postgres table.
-        upsert_spark_df_to_postgres(
+        self._db_helper.upsert_spark_df_to_postgres(
             dataframe_to_upsert=casted_dataframe,
             table_name=self._target_pg_table,
             table_unique_key=target_table_unique_key,
@@ -85,7 +111,7 @@ class LoadPostgresFromSparkDataFrame:
 
         query_to_run = pg_col_data_type_query % (schema, table)
 
-        results = fetch_query_results(
+        results = self._db_helper.fetch_query_results(
             query_to_run=query_to_run,
             database_credentials=self._database_credentials
         )
@@ -147,10 +173,11 @@ class LoadPostgresFromSparkDataFrame:
 
     def _get_source_dataframe(self, source, *args, **kwargs) -> DataFrame:
         """
-        Get the source data as Spark DataFrame.
-        :param source:
-        :param args:
-        :param kwargs:
+        Get the source data as Spark DataFrame based on source type details
+        defined in config.ini 'source_data_class_mapping' section.
+        :param source: source type.
+        :param args: source class arguments.
+        :param kwargs: source class keyword arguments.
         :return: source data as DataFrame.
         """
         source_class_mappings = self._get_config_section(
@@ -177,7 +204,7 @@ class LoadPostgresFromSparkDataFrame:
         for query in pg_primary_key_query, pg_unique_index_query:
 
             query_to_run = query % (schema, table)
-            result = fetch_query_results(
+            result = self._db_helper.fetch_query_results(
                 query_to_run=query_to_run,
                 database_credentials=self._database_credentials
             )

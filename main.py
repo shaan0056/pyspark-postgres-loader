@@ -16,13 +16,18 @@ def main() -> None:
     # Resolve Arguments.
     parser = ArgumentParser()
     parser.add_argument(
+        "--pg_python_package", type=str,
+        help="The postgres python package to use, i.e. asyncpg or psycopg2.",
+        required=False, default="asyncpg"
+    )
+    parser.add_argument(
         "--target_pg_table", type=str,
         help="Fully qualified target postgres table to load.",
         required=True
     )
     parser.add_argument(
         "--batch_size", type=int,
-        help="Batch size for loading the data.",
+        help="Batch size for loading the source data to target postgres table.",
         required=False, default=1000
     )
     parser.add_argument(
@@ -32,8 +37,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--source", type=str,
-        help="Data source type.", required=True,
-        default="s3"
+        help="Data source type.", required=True
     )
     parser.add_argument(
         "--source_arg",

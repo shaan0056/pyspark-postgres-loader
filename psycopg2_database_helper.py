@@ -231,7 +231,9 @@ def build_upsert_query(cols: List[str],
     update_cols_str = ', '.join(update_cols)
 
     update_cols_with_excluded_markers = [f'EXCLUDED.{col}' for col in update_cols]
-    update_cols_with_excluded_markers_str = ', '.join(update_cols_with_excluded_markers)
+    update_cols_with_excluded_markers_str = ', '.join(
+        update_cols_with_excluded_markers
+    )
 
     if len(update_cols) > 1:
         equality_clause = "(%s) = (%s)"
@@ -249,9 +251,42 @@ def build_upsert_query(cols: List[str],
     return insert_query + on_conflict_clause
 
 
+def fetch_query_results(query_to_run: str,
+                        database_credentials: Dict[str, str]) -> List[Tuple]:
+    """
+    Execute a select query and fetch it's results.
+    :param query_to_run: query to execute.
+    :param database_credentials: database credentials.
+        Example: database_credentials = {
+                    host: <host>,
+                    database: <database>,
+                    user: <user>,
+                    password: <password>,
+                    port: <port>
+                }
+    :return: query results.
+    """
+
+    conn = None
+
+    try:
+        conn = get_postgres_connection(**database_credentials)
+        cur = conn.cursor()
+        cur.execute(query_to_run)
+        return cur.fetchall()
+
+    except (Exception, Error) as ex:
+        print()
+        raise ex
+
+    finally:
+        if conn:
+            conn.close()
+
+
 def upsert_spark_df_to_postgres(dataframe_to_upsert: DataFrame,
                                 table_name: str,
-                                table_pkey: List[str],
+                                table_unique_key: List[str],
                                 database_credentials: Dict[str, str],
                                 batch_size: int = 1000,
                                 parallelism: int = 1) -> None:
@@ -261,7 +296,7 @@ def upsert_spark_df_to_postgres(dataframe_to_upsert: DataFrame,
     INSERTS as UPSERTS in postgres require a unique constraint to be present in the table.
     :param dataframe_to_upsert: spark DataFrame to upsert to postgres.
     :param table_name: postgres table name to upsert.
-    :param table_pkey: postgres table primary key.
+    :param table_unique_key: postgres table primary key.
     :param database_credentials: database credentials.
     :param batch_size: desired batch size for upsert.
     :param parallelism: No. of parallel connections to postgres database.
@@ -269,7 +304,7 @@ def upsert_spark_df_to_postgres(dataframe_to_upsert: DataFrame,
     """
     upsert_query = build_upsert_query(
         cols=dataframe_to_upsert.schema.names,
-        table_name=table_name, unique_key=table_pkey
+        table_name=table_name, unique_key=table_unique_key
     )
     upsert_stats = dataframe_to_upsert.coalesce(parallelism).rdd.mapPartitions(
         lambda dataframe_partition: batch_and_upsert(

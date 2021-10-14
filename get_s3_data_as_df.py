@@ -1,3 +1,7 @@
+"""
+A concrete class implementing GetSourceDataAsDf abstract class, which
+provides s3 csv and parquet data as Spark DataFrames.
+"""
 from get_source_data_as_df import GetSourceDataAsDf
 import boto3
 from pyspark.sql import DataFrame
