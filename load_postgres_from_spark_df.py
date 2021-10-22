@@ -31,6 +31,7 @@ class LoadPostgresFromSparkDataFrame:
                  target_pg_table,
                  batch_size,
                  parallelism,
+                 partition_cols,
                  spark,
                  source,
                  *source_class_args,
@@ -49,6 +50,7 @@ class LoadPostgresFromSparkDataFrame:
         self._target_pg_table = target_pg_table
         self._batch_size = batch_size
         self._parallelism = parallelism
+        self._partition_cols = partition_cols
         self._spark = spark
 
         # Load config.ini.
@@ -98,7 +100,8 @@ class LoadPostgresFromSparkDataFrame:
             table_unique_key=target_table_unique_key,
             database_credentials=self._database_credentials,
             batch_size=self._batch_size,
-            parallelism=self._parallelism
+            parallelism=self._parallelism,
+            partition_cols=self._partition_cols
         )
 
     def _get_col_dtypes(self) -> OrderedDict:

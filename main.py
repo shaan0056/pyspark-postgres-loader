@@ -36,6 +36,11 @@ def main() -> None:
         required=False, default=1
     )
     parser.add_argument(
+        "--partition_cols", type=int,
+        help="Columns to partition the DataFrame.",
+        required=False, default=None
+    )
+    parser.add_argument(
         "--source", type=str,
         help="Data source type.", required=True
     )
@@ -54,6 +59,7 @@ def main() -> None:
         target_pg_table=args.target_pg_table,
         batch_size=args.batch_size,
         parallelism=args.parallelism,
+        partition_cols=args.partition_cols,
         spark=spark,
         source=args.source,
         **args.source_args

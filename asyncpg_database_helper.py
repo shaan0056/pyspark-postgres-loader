@@ -9,11 +9,11 @@ from pyspark.sql import DataFrame, Row
 
 
 @asynccontextmanager
-async def savepoint(sp_conn,
-                    sp_name: str,
-                    func,
-                    *args,
-                    **kwargs) -> tuple:
+async def _savepoint(sp_conn,
+                     sp_name: str,
+                     func,
+                     *args,
+                     **kwargs) -> tuple:
     """
     An async context manager to set savepoint, execute a database action
     and rollback to the savepoint in the event of an exception or
@@ -67,9 +67,9 @@ async def get_postgres_connection(host: str,
     return conn
 
 
-async def execute_many_with_err_handling(db_conn,
-                                         batch_list: List[List[Row]],
-                                         sql: str) -> Tuple[int, List[str]]:
+async def _execute_many_with_err_handling(db_conn,
+                                          batch_list: List[List[Row]],
+                                          sql: str) -> Tuple[int, List[str]]:
     """
     Execute a database action with error handling.
     :param db_conn: asyncpg connection.
@@ -84,14 +84,14 @@ async def execute_many_with_err_handling(db_conn,
     while batch_list:
         batch = batch_list.pop()
 
-        async with savepoint(
+        async with _savepoint(
                 db_conn, 'my_sp',
                 db_conn.executemany,
                 command=sql, args=batch
         ) as (output, error):
 
             if error:
-                split_batches = batch_error_handler(batch=batch)
+                split_batches = _batch_error_handler(batch=batch)
 
                 if split_batches:
                     batch_list.extend(split_batches)
@@ -102,7 +102,7 @@ async def execute_many_with_err_handling(db_conn,
     return total_error_count, total_error_msgs
 
 
-def batch_error_handler(batch: List[Row]) -> List[List[Row]] or None:
+def _batch_error_handler(batch: List[Row]) -> List[List[Row]] or None:
     """
     Split the rejected batch into two equal halves and return the same.
     If however, the batch has only one record, return None to indicate
@@ -120,10 +120,10 @@ def batch_error_handler(batch: List[Row]) -> List[List[Row]] or None:
     return split_batches
 
 
-async def batch_and_upsert(dataframe_partition: Iterable[Row],
-                           sql: str,
-                           database_credentials: dict,
-                           batch_size: int = 1000):
+async def _batch_and_upsert(dataframe_partition: Iterable[Row],
+                            sql: str,
+                            database_credentials: dict,
+                            batch_size: int = 1000):
     """
     Batch the input dataframe_partition as per batch_size and insert/update
     to postgres using asyncpg executemany with built in error handling.
@@ -157,7 +157,7 @@ async def batch_and_upsert(dataframe_partition: Iterable[Row],
 
             async_transaction = conn.transaction()
             await async_transaction.start()
-            total_error_count, total_error_msgs = await execute_many_with_err_handling(
+            total_error_count, total_error_msgs = await _execute_many_with_err_handling(
                 db_conn=conn,
                 batch_list=batch_list,
                 sql=sql,
@@ -176,7 +176,7 @@ async def batch_and_upsert(dataframe_partition: Iterable[Row],
 
         async_transaction = conn.transaction()
         await async_transaction.start()
-        total_error_count, total_error_msgs = await execute_many_with_err_handling(
+        total_error_count, total_error_msgs = await _execute_many_with_err_handling(
             db_conn=conn,
             batch_list=batch_list,
             sql=sql,
@@ -192,10 +192,10 @@ async def batch_and_upsert(dataframe_partition: Iterable[Row],
     return counter, error_counter, final_error_msgs
 
 
-def build_upsert_query(cols: List[str],
-                       table_name: str,
-                       unique_key: List[str] = None,
-                       cols_not_for_update: List[str] = None) -> str:
+def _build_upsert_query(cols: List[str],
+                        table_name: str,
+                        unique_key: List[str] = None,
+                        cols_not_for_update: List[str] = None) -> str:
     """
     Builds postgres upsert query using input arguments.
     Note: In the absence of unique_key, this will be just an insert query.
@@ -273,7 +273,7 @@ def fetch_query_results(query_to_run: str, database_credentials: Dict[str, str])
     :return: query results.
     """
 
-    async def fetch_query_results_async():
+    async def _fetch_query_results_async():
         conn = None
         try:
             conn = await get_postgres_connection(**database_credentials)
@@ -286,7 +286,7 @@ def fetch_query_results(query_to_run: str, database_credentials: Dict[str, str])
             if conn:
                 await conn.close()
 
-    return run_coroutine(fetch_query_results_async())
+    return _run_coroutine(_fetch_query_results_async())
 
 
 def upsert_spark_df_to_postgres(dataframe_to_upsert: DataFrame,
@@ -294,7 +294,8 @@ def upsert_spark_df_to_postgres(dataframe_to_upsert: DataFrame,
                                 table_unique_key: List[str],
                                 database_credentials: Dict[str, str],
                                 batch_size: int = 1000,
-                                parallelism: int = 1) -> None:
+                                parallelism: int = 1,
+                                partition_cols: List[str] = None) -> None:
     """
     Upsert a spark DataFrame into a postgres table with error handling.
     Note: If the target table lacks any unique index, data will be appended through
@@ -312,13 +313,14 @@ def upsert_spark_df_to_postgres(dataframe_to_upsert: DataFrame,
                 }
     :param batch_size: desired batch size for upsert.
     :param parallelism: No. of parallel connections to postgres database.
+    :param partition_cols: partitioning columns.
     :return:None
     """
 
-    def yield_batch_and_upsert(dataframe_partition):
+    def _yield_batch_and_upsert(dataframe_partition):
 
-        yield run_coroutine(
-            batch_and_upsert(
+        yield _run_coroutine(
+            _batch_and_upsert(
                 dataframe_partition=dataframe_partition,
                 sql=upsert_query,
                 database_credentials=database_credentials,
@@ -326,19 +328,29 @@ def upsert_spark_df_to_postgres(dataframe_to_upsert: DataFrame,
             )
         )
 
-    upsert_query = build_upsert_query(
+    # Build Upsert query.
+    upsert_query = _build_upsert_query(
         cols=dataframe_to_upsert.schema.names,
         table_name=table_name, unique_key=table_unique_key
     )
-    upsert_stats = dataframe_to_upsert.coalesce(parallelism).rdd.mapPartitions(
-        lambda dataframe_partition: yield_batch_and_upsert(dataframe_partition)
+
+    # Partition the DataFrame as per input arguments.
+    if partition_cols:
+        dataframe_to_upsert = dataframe_to_upsert.repartition(parallelism, *partition_cols)
+    else:
+        dataframe_to_upsert = dataframe_to_upsert.coalesce(parallelism)
+
+    # Upsert the DataFrame to Postgres.
+    load_stats = dataframe_to_upsert.coalesce(parallelism).rdd.mapPartitions(
+        lambda dataframe_partition: _yield_batch_and_upsert(dataframe_partition)
     )
 
+    # Print Load Stats.
     total_recs_loaded = 0
     total_recs_rejects = 0
     error_msgs = []
 
-    for counter, error_counter, final_error_msgs in upsert_stats.collect():
+    for counter, error_counter, final_error_msgs in load_stats.collect():
         total_recs_loaded += counter
         total_recs_rejects += error_counter
         error_msgs.extend(final_error_msgs)
@@ -356,7 +368,7 @@ def upsert_spark_df_to_postgres(dataframe_to_upsert: DataFrame,
         print(" Completed Printing Error Messages ....")
 
 
-def run_coroutine(coroutine):
+def _run_coroutine(coroutine):
     """
     Run a coroutine using asyncio.
     :param coroutine: coroutine to run.
