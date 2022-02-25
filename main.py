@@ -56,6 +56,7 @@ def main() -> None:
 
     # Start Postgres Load Process.
     LoadPostgresFromSparkDataFrame(
+        pg_package=args.pg_python_package,
         target_pg_table=args.target_pg_table,
         batch_size=args.batch_size,
         parallelism=args.parallelism,
